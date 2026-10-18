@@ -39,11 +39,17 @@ final class BackgroundRepository {
     static final class Scene {
         final Bitmap bitmap;
         final String source, title, subtitle, credit, packageName, status;
+        final String captionTitle,captionDetail,captionSource;
         Scene(Bitmap bitmap, String source, String title, String subtitle, String credit, String packageName, String status) {
+            this(bitmap,source,title,subtitle,credit,packageName,status,"","",credit);
+        }
+        Scene(Bitmap bitmap,String source,String title,String subtitle,String credit,String packageName,String status,
+              String captionTitle,String captionDetail,String captionSource) {
             this.bitmap=bitmap; this.source=source; this.title=title; this.subtitle=subtitle;
+            this.captionTitle=captionTitle;this.captionDetail=captionDetail;this.captionSource=captionSource;
             this.credit=credit; this.packageName=packageName; this.status=status;
         }
-        Scene status(String value) { return new Scene(bitmap,source,title,subtitle,credit,packageName,value); }
+        Scene status(String value) { return new Scene(bitmap,source,title,subtitle,credit,packageName,value,captionTitle,captionDetail,captionSource); }
     }
 
     static SharedPreferences prefs(Context context) { return context.getSharedPreferences("home-background",Context.MODE_PRIVATE); }
@@ -125,8 +131,11 @@ final class BackgroundRepository {
         java.util.List<GalleryCollection.Work> works=GalleryCollection.read(context,kind);
         JSONObject previous=metadata(context,kind);
         Scene cached=cache(context,kind,null);
-        if(!force&&cached!=null&&fresh(context,kind,GalleryCollection.ROTATE_MS))
-            return cached.status(("art".equals(kind)?"西方艺术":"NASA 太空")+" · 《"+previous.optString("art_title")+"》");
+        if(!force&&cached!=null&&fresh(context,kind,GalleryCollection.ROTATE_MS)) {
+            // Resolve old and new cache labels from the catalog without parsing display credit or downloading again.
+            for(GalleryCollection.Work item:works)if(item.id.equals(previous.optString("artwork_id")))
+                return scene(cached.bitmap,kind,item.metadata()).status(("art".equals(kind)?"西方艺术":"NASA 太空")+" · 《"+item.title+"》");
+        }
         String before=previous.optString("artwork_id","");
         GalleryCollection.Work work=GalleryCollection.next(works,before,false,direction);
         byte[] bytes;boolean bundled=!work.asset.isEmpty();
@@ -174,7 +183,7 @@ final class BackgroundRepository {
 
     private static Scene fetchImage(Context context,String kind,String uri,JSONObject meta,boolean force) throws Exception {
         Scene cached=cache(context,kind,uri);
-        if(cached!=null && !force) return new Scene(cached.bitmap,kind,meta.optString("title"),meta.optString("subtitle"),meta.optString("credit"),meta.optString("package"),"");
+        if(cached!=null && !force) return scene(cached.bitmap,kind,meta);
         byte[] bytes;
         if("content".equals(Uri.parse(uri).getScheme())) {
             try(InputStream input=context.getContentResolver().openInputStream(Uri.parse(uri))) {
@@ -203,7 +212,8 @@ final class BackgroundRepository {
         catch(IOException invalid){return null;}
     }
     private static Scene scene(Bitmap image,String kind,JSONObject meta) {
-        return new Scene(image,kind,meta.optString("title"),meta.optString("subtitle"),meta.optString("credit"),meta.optString("package"),"");
+        return new Scene(image,kind,meta.optString("title"),meta.optString("subtitle"),meta.optString("credit"),meta.optString("package"),"",
+            meta.optString("caption_title"),meta.optString("caption_detail"),meta.optString("caption_source",meta.optString("credit")));
     }
     private static boolean fresh(Context context,String kind,long age) throws Exception {
         long elapsed=System.currentTimeMillis()-metadata(context,kind).optLong("saved_at",0);return elapsed>=0 && elapsed<age;

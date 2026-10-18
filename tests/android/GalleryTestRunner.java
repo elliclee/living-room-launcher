@@ -24,12 +24,18 @@ public final class GalleryTestRunner extends Instrumentation {
   reject(()->GalleryCollection.parse(catalog("art"),"nasa"),"mixed provider identity");passed.put("rights flags, provider identity, image origin and asset path enforced");
   File dir=new File(app.getFilesDir(),"backgrounds");for(String kind:new String[]{"art","nasa"})for(String suffix:new String[]{".json",".img"})new File(dir,kind+suffix).delete();
   BackgroundRepository.prefs(app).edit().putString("source","art").commit();
-  BackgroundRepository.Scene first=BackgroundRepository.load(app,true);String id=current("art");check(first.source.equals("art")&&first.credit.contains("CC0"),"Art metadata");first.bitmap.recycle();
-  BackgroundRepository.Scene cached=BackgroundRepository.load(app,false);check(current("art").equals(id),"Fresh art cache stable");cached.bitmap.recycle();
+  BackgroundRepository.Scene first=BackgroundRepository.load(app,true);String id=current("art");check(first.source.equals("art")&&first.credit.contains("CC0"),"Art metadata");
+  GalleryCollection.Work artwork=GalleryCollection.read(app,"art").get(0);check(first.captionTitle.equals(artwork.title)&&first.captionDetail.equals(artwork.artist+" · "+artwork.date)&&first.captionSource.equals(artwork.attribution()),"Structured art caption");
+  check(first.status("changed").captionTitle.equals(first.captionTitle),"Status preserves caption");first.bitmap.recycle();
+  BackgroundRepository.Scene cached=BackgroundRepository.load(app,false);check(current("art").equals(id)&&cached.captionTitle.equals(artwork.title),"Fresh art cache and caption stable");cached.bitmap.recycle();
+  File metaPath=new File(dir,"art.json");JSONObject legacy;try(InputStream input=new FileInputStream(metaPath);ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] b=new byte[4096];int n;while((n=input.read(b))!=-1)out.write(b,0,n);legacy=new JSONObject(out.toString("UTF-8"));}
+  for(String key:new String[]{"caption_title","caption_detail","caption_source"})legacy.remove(key);legacy.put("credit","Legacy formatted credit");
+  try(OutputStream output=new FileOutputStream(metaPath)){output.write(legacy.toString().getBytes("UTF-8"));}
+  BackgroundRepository.Scene upgraded=BackgroundRepository.load(app,false);check(current("art").equals(id)&&upgraded.captionTitle.equals(artwork.title)&&upgraded.captionSource.equals(artwork.attribution()),"Legacy cache gets catalog caption without rotation");upgraded.bitmap.recycle();
   BackgroundRepository.Scene next=BackgroundRepository.load(app,true,1);check(!current("art").equals(id),"Forced next");next.bitmap.recycle();
   BackgroundRepository.Scene prev=BackgroundRepository.load(app,true,-1);check(current("art").equals(id),"Actual previous");prev.bitmap.recycle();
-  BackgroundRepository.prefs(app).edit().putString("source","nasa").commit();BackgroundRepository.Scene nasa=BackgroundRepository.load(app,true);check(nasa.source.equals("nasa")&&!nasa.credit.contains("CC0"),"NASA provenance distinct");nasa.bitmap.recycle();
-  passed.put("real background loading, stable timed cache, forced next/previous and NASA credit");
+  BackgroundRepository.prefs(app).edit().putString("source","nasa").commit();BackgroundRepository.Scene nasa=BackgroundRepository.load(app,true);check(nasa.source.equals("nasa")&&!nasa.credit.contains("CC0")&&nasa.captionTitle.length()>0&&nasa.captionDetail.contains("NASA")&&nasa.captionSource.equals("NASA 图片与媒体使用规范"),"NASA structured provenance distinct");nasa.bitmap.recycle();
+  passed.put("real loading, structured captions, legacy cache upgrade, stable cache, next/previous and NASA credit");
   BackgroundRepository.prefs(app).edit().putString("source","art").commit();app.getSharedPreferences("home-layout",0).edit().putBoolean("home_role_prompted",true).commit();
   result.putString("passed",passed.toString());finish(Activity.RESULT_OK,result);
  }catch(Throwable failure){result.putString("failure",failure.toString());finish(Activity.RESULT_CANCELED,result);}}

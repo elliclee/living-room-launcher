@@ -32,10 +32,12 @@ final class GalleryCollection {
                     ||!asset.isEmpty()&&(!asset.equals(folder+"/"+id+".jpg")||!digest.matches("[0-9a-f]{64}")||bytes<=0||bytes>8L*1024*1024))
                 throw new IOException("Invalid gallery catalog entry");
         }
+        String attribution(){return "artic".equals(source)?"芝加哥艺术博物馆 · CC0":"NASA 图片与媒体使用规范";}
         JSONObject metadata() throws Exception {
-            String credit="《"+title+"》 · "+artist+" · "+date+"\n"+("artic".equals(source)?"芝加哥艺术博物馆 · CC0":"NASA 图片与媒体使用规范");
+            String credit="《"+title+"》 · "+artist+" · "+date+"\n"+attribution();
             return new JSONObject().put("identity",image).put("artwork_id",id).put("title","").put("subtitle","")
                 .put("art_title",title).put("credit",credit)
+                .put("caption_title",title).put("caption_detail",artist+" · "+date).put("caption_source",attribution())
                 .put("source_url",("artic".equals(source)?"https://www.artic.edu/artworks/":"https://images.nasa.gov/details/")+id).put("license",license);
         }
     }

@@ -93,7 +93,8 @@ public final class HomeActivity extends Activity {
     private TextView clock,empty,sceneTitle,sceneSubtitle,focusedName,noticeText;
     private Button sceneOpen;
     private View settings,scrim,backgroundTarget;
-    private TextView backgroundCaption;
+    private LinearLayout backgroundCaption;
+    private TextView artworkName,artworkDetail,artworkSource;
     private boolean browsing;
     private int queuedGallerySteps;
     private Control gearControl;
@@ -244,8 +245,18 @@ public final class HomeActivity extends Activity {
         notice.addView(noticeText,new FrameLayout.LayoutParams(-2,-2));
         FrameLayout.LayoutParams noticeParams=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.RIGHT);noticeParams.rightMargin=px(56);noticeParams.topMargin=px(126);root.addView(notice,noticeParams);
 
-        backgroundCaption=text("",CAPTION1,TvAppearance.TEXT,400);backgroundCaption.setMaxLines(4);legible(backgroundCaption);backgroundCaption.setVisibility(View.GONE);
-        FrameLayout.LayoutParams creditParams=new FrameLayout.LayoutParams(width-px(160),-2,Gravity.BOTTOM|Gravity.START);creditParams.leftMargin=px(80);creditParams.bottomMargin=px(40);root.addView(backgroundCaption,creditParams);
+        backgroundCaption=new LinearLayout(this);backgroundCaption.setOrientation(LinearLayout.VERTICAL);backgroundCaption.setVisibility(View.GONE);
+        artworkName=text("",HEADLINE,TvAppearance.TEXT,500);
+        artworkDetail=text("",CAPTION2,0xe6f5f5f7,400);
+        // A quiet gallery imprint; this local role is smaller than interactive TV labels.
+        artworkSource=text("",20,TvAppearance.TEXT,400);
+        for(TextView label:new TextView[]{artworkName,artworkDetail,artworkSource}){
+            label.setIncludeFontPadding(false);label.setMaxLines(2);label.setEllipsize(TextUtils.TruncateAt.END);legible(label);
+            backgroundCaption.addView(label,new LinearLayout.LayoutParams(-1,-2));
+        }
+        artworkDetail.setPadding(0,px(12),0,0);artworkSource.setPadding(0,px(6),0,0);
+        FrameLayout.LayoutParams creditParams=new FrameLayout.LayoutParams(Math.min(width-px(160),px(1100)),-2,Gravity.BOTTOM|Gravity.START);
+        creditParams.leftMargin=px(80);creditParams.bottomMargin=px(56);root.addView(backgroundCaption,creditParams);
         scrim=new View(this);scrim.setBackgroundColor(0xff000000);scrim.setAlpha(0);scrim.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         root.addView(scrim,new FrameLayout.LayoutParams(-1,-1));
         applyMotion(false);
@@ -295,7 +306,10 @@ public final class HomeActivity extends Activity {
     }
     private void updateBackgroundCaption(){
         backgroundCaption.setVisibility(browsing?View.VISIBLE:View.GONE);
-        if(browsing)backgroundCaption.setText((scene==null||scene.credit.isEmpty()?"":scene.credit+"\n")+"左右切换图片 · 下键返回应用");
+        if(!browsing)return;
+        String[] values=scene==null?new String[]{"","",""}:new String[]{scene.captionTitle,scene.captionDetail,scene.captionSource};
+        TextView[] labels={artworkName,artworkDetail,artworkSource};
+        for(int i=0;i<labels.length;i++){labels[i].setText(values[i]);labels[i].setVisibility(values[i].isEmpty()?View.GONE:View.VISIBLE);}
     }
     private void changeBackground(int direction){
         if(!GalleryCollection.isGallery(BackgroundRepository.mode(this))){
