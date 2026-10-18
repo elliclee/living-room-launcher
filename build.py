@@ -138,7 +138,7 @@ def main():
     run([sdktool('aapt2'), 'link', '-o', unsigned, '-I', PLATFORM, '--manifest', ROOT / 'AndroidManifest.xml', '-R', resources])
     with zipfile.ZipFile(unsigned, 'a', compression=zipfile.ZIP_DEFLATED) as package:
         package.write(dex / 'classes.dex', 'classes.dex')
-        for group in ["wallpapers", "art", "nasa"]:
+        for group in ["wallpapers", "art", "nasa", "photography"]:
             for asset in sorted((ROOT / "assets" / group).rglob("*")):
                 if asset.is_file(): package.write(asset, asset.relative_to(ROOT).as_posix())
     run([sdktool('zipalign'), '-f', '4', unsigned, aligned])

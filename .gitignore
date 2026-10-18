@@ -10,3 +10,6 @@ __pycache__/
 .env
 .env.*
 .DS_Store
+
+# 用户摄影集仅用于自己的构建，禁止随公开源码提交
+assets/photography/

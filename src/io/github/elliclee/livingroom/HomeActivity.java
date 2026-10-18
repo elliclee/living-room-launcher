@@ -223,6 +223,7 @@ public final class HomeActivity extends Activity {
 
         pill=new TvAppearance.Glass(this,wallpaper,-1,px(1.4f),TvAppearance.CLEAR).clipContent(false);
         LinearLayout time=new LinearLayout(this);time.setGravity(Gravity.CENTER_VERTICAL);time.setPadding(px(24),0,px(6),0);
+        time.setClipChildren(false);time.setClipToPadding(false);
         clock=text("",CAPTION1,TvAppearance.TEXT,500);time.addView(clock,new LinearLayout.LayoutParams(-2,-2));
         settings=new View(this);settings.setId(View.generateViewId());settings.setFocusable(true);settings.setClickable(true);settings.setContentDescription("控制中心");
         if(Build.VERSION.SDK_INT>=26)settings.setDefaultFocusHighlightEnabled(false);
@@ -270,7 +271,7 @@ public final class HomeActivity extends Activity {
     private int nameWidth(){return Math.round(cardWidth*FOCUS_SCALE)+px(GUTTER);}
     private int gridHeight(int count){int rows=Math.max(1,(count+COLUMNS-1)/COLUMNS);return px(GRID_TOP)*2+rows*rowPitch-px(ROW_GAP)+px(NAME_SPACE);}
     private final Runnable tick=new Runnable(){
-        @Override public void run(){if(destroyed)return;clock.setText(android.text.format.DateFormat.getTimeFormat(HomeActivity.this).format(new Date()));if(lastBackground>0&&!backgroundBusy&&GalleryCollection.isGallery(BackgroundRepository.mode(HomeActivity.this))&&System.currentTimeMillis()-lastBackground>=GalleryCollection.ROTATE_MS)refreshBackground(false);ui.postDelayed(this,60000-System.currentTimeMillis()%60000);}
+        @Override public void run(){if(destroyed)return;clock.setText(android.text.format.DateFormat.getTimeFormat(HomeActivity.this).format(new Date()));if(lastBackground>0&&!backgroundBusy&&BackgroundRepository.rotates(HomeActivity.this)&&System.currentTimeMillis()-lastBackground>=GalleryCollection.ROTATE_MS){BackgroundRepository.advance(HomeActivity.this);refreshBackground(false);}ui.postDelayed(this,60000-System.currentTimeMillis()%60000);}
     };
     @Override protected void onResume(){
         super.onResume();ui.removeCallbacks(tick);tick.run();loadApps();
@@ -280,19 +281,22 @@ public final class HomeActivity extends Activity {
         }
     }
     @Override protected void onPause(){ui.removeCallbacks(tick);if(moving!=null)finishMove();super.onPause();}
-    private void refreshBackground(boolean force){refreshBackground(force,1);}
+    private void refreshBackground(boolean force){if(force&&!backgroundBusy)BackgroundRepository.advance(this);refreshBackground(force,1);}
     private void refreshBackground(boolean force,int direction){
         // A manual refresh while an automatic one runs waits for it instead of being reported as a failure.
         if(backgroundBusy){if(force){forceQueued=true;if(!browsing)notice("正在更新背景……",false);}return;}
         backgroundBusy=true;if(force&&!browsing)notice("正在更新背景……",false);
-        final int generation=++backgroundGeneration;final String requestedMode=BackgroundRepository.mode(this);
+        final int generation=++backgroundGeneration;final String requestedMode=BackgroundRepository.mode(this);final long selectionRevision=BackgroundRepository.selectionRevision(this);
         backgrounds.execute(()->{
             BackgroundRepository.Scene result=null;Bitmap frosted=null;RuntimeException error=null;
             try{result=BackgroundRepository.load(getApplicationContext(),force,direction);frosted=TvAppearance.frost(result.bitmap);}catch(RuntimeException failure){error=failure;}
             final BackgroundRepository.Scene value=result;final Bitmap frost=frosted;final RuntimeException problem=error;
             ui.post(()->{if(destroyed||generation!=backgroundGeneration)return;backgroundBusy=false;lastBackground=System.currentTimeMillis();
                 boolean again=forceQueued;forceQueued=false;int steps=queuedGallerySteps;queuedGallerySteps=0;
-                if(!requestedMode.equals(BackgroundRepository.mode(this))){refreshBackground(force||again||steps!=0,steps==0?direction:steps);return;}
+                if(!requestedMode.equals(BackgroundRepository.mode(this))||selectionRevision!=BackgroundRepository.selectionRevision(this)){
+                    if(frost!=null&&value!=null&&frost!=value.bitmap)frost.recycle();if(value!=null)value.bitmap.recycle();
+                    refreshBackground(force||again||steps!=0,steps==0?direction:steps);return;
+                }
                 if(value!=null&&frost!=null){scene=value;wallpaper.image(value.bitmap,frost);applyScene();}
                 else failure("背景读取失败（"+BackgroundRepository.reason(problem)+"）");
                 if(steps!=0)refreshBackground(true,steps);
@@ -312,9 +316,7 @@ public final class HomeActivity extends Activity {
         for(int i=0;i<labels.length;i++){labels[i].setText(values[i]);labels[i].setVisibility(values[i].isEmpty()?View.GONE:View.VISIBLE);}
     }
     private void changeBackground(int direction){
-        if(!GalleryCollection.isGallery(BackgroundRepository.mode(this))){
-            BackgroundRepository.prefs(this).edit().putString("source","art").apply();
-        }
+        if(!BackgroundRepository.activateGallery(this))return;
         if(backgroundBusy){queuedGallerySteps=Math.max(-8,Math.min(8,queuedGallerySteps+direction));return;}
         refreshBackground(true,direction);
     }
@@ -696,10 +698,10 @@ public final class HomeActivity extends Activity {
         ValueAnimator animator;
         float value;
         boolean held;
-        Control(View view,TvAppearance.Fill fill,float scale){this(view,view,fill,scale);}
-        /** The fill may live on a child layer so glass can draw its backdrop underneath it. */
-        Control(View view,View host,TvAppearance.Fill fill,float scale){
-            this.view=view;this.fill=fill;this.scale=scale;host.setBackground(fill);view.setTag(this);
+        Control(View view,TvAppearance.Fill fill,float scale){
+            this.view=view;this.fill=fill;this.scale=scale;
+            if(view instanceof TvAppearance.Glass)((TvAppearance.Glass)view).focusFill(fill);else view.setBackground(fill);
+            view.setTag(this);
             if(Build.VERSION.SDK_INT>=26)view.setDefaultFocusHighlightEnabled(false);
             view.setOnFocusChangeListener(this);
         }
@@ -827,7 +829,10 @@ public final class HomeActivity extends Activity {
             owner.surface.animate().alpha(0).translationX(dx).translationY(dy).setDuration(180).setInterpolator(leave).setUpdateListener(a->owner.refreshGlass()).withEndAction(this::finishDismiss).start();
         }
         void dismissNow(){if(!leaving){leaving=true;owner.closing();}finishDismiss();}
-        private void finishDismiss(){openPanels.remove(owner);try{super.dismiss();}catch(IllegalArgumentException detached){/* window already removed with the activity */}}
+        private void finishDismiss(){
+            openPanels.remove(owner);try{super.dismiss();}catch(IllegalArgumentException detached){/* window already removed with the activity */}
+            ui.post(()->{if(!destroyed&&root.hasWindowFocus()&&openPanels.isEmpty())focusInitial();});
+        }
     }
     private void holdScrim(float level){
         scrimUsers++;scrim.animate().cancel();
@@ -877,13 +882,13 @@ public final class HomeActivity extends Activity {
     private LinearLayout moduleRow(boolean vertical){LinearLayout l=new LinearLayout(this);l.setOrientation(vertical?LinearLayout.VERTICAL:LinearLayout.HORIZONTAL);l.setClipChildren(false);l.setClipToPadding(false);return l;}
     /** One Control Center module: 0 large square, 1 capsule with value, 2 round button labelled underneath. */
     private View module(Panel panel,int shape,int glyphKind,String title,String value,Runnable action){
-        TvAppearance.Glass glass=new TvAppearance.Glass(this,wallpaper,shape==0?px(52):-1,px(1.4f),TvAppearance.CLEAR).clipContent(false);panel.glass.add(glass);
+        float radius=shape==0?px(52):-1;
+        TvAppearance.Glass glass=new TvAppearance.Glass(this,wallpaper,radius,px(1.4f),TvAppearance.CLEAR).clipContent(false);panel.glass.add(glass);
         glass.setFocusable(true);glass.setClickable(true);glass.setContentDescription(value==null?title:title+"，"+value);
-        View fillLayer=new View(this);TvAppearance.Fill fill=new TvAppearance.Fill(0x00ffffff,shape==0?px(52):-1);
-        glass.addView(fillLayer,new FrameLayout.LayoutParams(-1,-1));
+        TvAppearance.Fill fill=new TvAppearance.Fill(0x00ffffff,radius);
         TvAppearance.Glyph glyph=new TvAppearance.Glyph(glyphKind,TvAppearance.TEXT).weight(shape==0?.06f:.085f);
         View mark=new View(this);mark.setBackground(glyph);
-        Control control=new Control(glass,fillLayer,fill,shape==0?1.05f:1.08f).glyph(glyph);
+        Control control=new Control(glass,fill,shape==0?1.05f:1.08f).glyph(glyph);
         glass.setOnClickListener(v->{panel.dialog.dismiss();action.run();});
         if(shape==0){
             LinearLayout column=new LinearLayout(this);column.setOrientation(LinearLayout.VERTICAL);column.setGravity(Gravity.CENTER);
@@ -979,25 +984,37 @@ public final class HomeActivity extends Activity {
         panel.action("返回",()->{panel.dialog.dismiss();showUpdates();});panel.show();
     }
     private void backgroundSettings(){
-        Panel panel=new Panel("背景来源",BackgroundRepository.status()+(scene!=null&&!scene.credit.isEmpty()?"\n"+scene.credit:""),px(820),Panel.CENTER);
-        String mode=BackgroundRepository.mode(this);
+        Panel panel=new Panel("背景来源","点击勾选或取消，可同时选择多个来源。每 30 分钟轮换，至少保留一项。",px(820),Panel.CENTER);
+        final Button[] customRow=new Button[1];
         for(int i=0;i<BackgroundRepository.MODES.length;i++){
-            final String source=BackgroundRepository.MODES[i];Button button=panel.action(BackgroundRepository.LABELS[i],()->{
-                panel.dialog.dismiss();if("custom".equals(source)){customBackground();return;}
-                BackgroundRepository.prefs(this).edit().putString("source",source).apply();refreshBackground(false);
-            });selectionMark(button,mode.equals(source));
-            if(mode.equals(source))panel.first=button;
+            final String source=BackgroundRepository.MODES[i];final Button[] row=new Button[1];
+            row[0]=panel.action(BackgroundRepository.LABELS[i],()->{
+                if("custom".equals(source)&&!BackgroundRepository.selected(this).contains(source)&&BackgroundRepository.prefs(this).getString("custom_url","").isEmpty()){
+                    panel.first=row[0];customBackground(()->{selectionMark(row[0],true);});return;
+                }
+                if(!BackgroundRepository.toggle(this,source)){panel.note("请至少保留一个背景来源");return;}
+                selectionMark(row[0],BackgroundRepository.selected(this).contains(source));refreshBackground(false);
+            });
+            selectionMark(row[0],BackgroundRepository.selected(this).contains(source));
+            if("custom".equals(source))customRow[0]=row[0];
+            if(BackgroundRepository.mode(this).equals(source))panel.first=row[0];
         }
+        panel.action("自定义地址",TvAppearance.Glyph.PHOTO,()->{
+            customBackground(()->{
+                selectionMark(customRow[0],true);
+            });
+        });
         panel.action("接口状态",TvAppearance.Glyph.INFO,()->{panel.dialog.dismiss();Panel detail=new Panel("背景更新状态",BackgroundRepository.status()+"\n\n最近观看来自本机 TCL 桌面提供的数据入口。当前按钮打开视频应用；指定集数续播仍在核对。\n\n系统当前壁纸尚无已确认的读取入口。",px(840),Panel.CENTER);detail.action("返回",()->{detail.dialog.dismiss();backgroundSettings();});detail.show();});
         panel.action("返回",()->panel.dialog.dismiss());panel.show();
     }
-    private void customBackground(){
+    private void customBackground(Runnable saved){
         Panel panel=new Panel("自定义背景","填写 HTTP(S) 图片地址，或返回 image_url、title、subtitle 的 JSON 接口。",px(900),Panel.CENTER);
         EditText input=field(BackgroundRepository.prefs(this).getString("custom_url",""),"https://…",android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);
         LinearLayout.LayoutParams ep=new LinearLayout.LayoutParams(-1,-2);ep.bottomMargin=px(24);panel.content.addView(input,ep);
         panel.action("保存并更新",()->{String value=input.getText().toString().trim();Uri uri=Uri.parse(value);
             if(!("http".equalsIgnoreCase(uri.getScheme())||"https".equalsIgnoreCase(uri.getScheme()))||uri.getHost()==null||uri.getUserInfo()!=null){failure("请输入有效的 HTTP(S) 地址");input.requestFocus();return;}
-            panel.dialog.dismiss();BackgroundRepository.prefs(this).edit().putString("custom_url",value).putString("source","custom").apply();refreshBackground(true);
+            try{BackgroundRepository.configureCustom(this,value);}catch(java.io.IOException invalid){failure("请输入有效的 HTTP(S) 地址");input.requestFocus();return;}
+            panel.dialog.dismiss();saved.run();refreshBackground(true,1);
         });panel.action("取消",()->panel.dialog.dismiss());panel.show();
     }
     private void focusGrid(){
@@ -1010,6 +1027,10 @@ public final class HomeActivity extends Activity {
         if(firstLoad||!hasWindowFocus())return;
         if(browsing){backgroundTarget.requestFocusFromTouch();return;}
         if(visible.isEmpty())settings.requestFocusFromTouch();else{grid.requestFocusFromTouch();grid.setSelection(selectedPosition);}
+    }
+    @Override public void onWindowFocusChanged(boolean focused){
+        super.onWindowFocusChanged(focused);
+        if(focused&&grid!=null&&!destroyed&&openPanels.isEmpty())focusInitial();
     }
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);if(grid!=null&&grid.getSelectedItemPosition()<0)focusInitial();}
     @Override public boolean onKeyDown(int key,KeyEvent event){

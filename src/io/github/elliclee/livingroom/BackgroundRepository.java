@@ -29,8 +29,8 @@ final class BackgroundRepository {
     private static final String[] DAILY = {
         "https://cn.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN",
         "https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN"};
-    static final String[] MODES = {"recent", "daily", "art", "nasa", "coast", "custom"};
-    static final String[] LABELS = {"最近观看优先", "每日风景", "西方艺术 · 画廊", "NASA · 太空", "原创海岸 · 离线", "自定义图片或接口"};
+    static final String[] MODES = {"recent", "daily", "art", "nasa", "photography", "coast", "custom"};
+    static final String[] LABELS = {"最近观看优先", "每日风景", "西方艺术 · 画廊", "NASA · 太空", "摄影集", "原创海岸 · 离线", "自定义图片或接口"};
     private static volatile String lastStatus = "尚未更新";
     private static volatile String lastError = "";
     private static volatile String lastSource = "none";
@@ -53,16 +53,61 @@ final class BackgroundRepository {
     }
 
     static SharedPreferences prefs(Context context) { return context.getSharedPreferences("home-background",Context.MODE_PRIVATE); }
+    /** Canonical order is owned here; old single-source preferences are read without losing their choice. */
+    static java.util.List<String> selected(Context context) {
+        SharedPreferences preferences=prefs(context);
+        java.util.Set<String> stored=preferences.getStringSet("sources",null);
+        java.util.List<String> values=new java.util.ArrayList<>();
+        if(stored==null){
+            String legacy=preferences.getString("source","recent");
+            for(String source:MODES)if(source.equals(legacy))values.add(source);
+        }else for(String source:MODES)if(stored.contains(source))values.add(source);
+        if(values.isEmpty())values.add("recent");
+        return java.util.Collections.unmodifiableList(values);
+    }
     static String mode(Context context) {
-        String value=prefs(context).getString("source","recent");
-        for (String item : MODES) if (item.equals(value)) return value;
-        return "recent";
+        java.util.List<String> values=selected(context);String current=prefs(context).getString("source",values.get(0));
+        return values.contains(current)?current:values.get(0);
+    }
+    private static String sourceLabel(String source){
+        for(int i=0;i<MODES.length;i++)if(MODES[i].equals(source))return LABELS[i];
+        throw new IllegalArgumentException("Unknown background source");
     }
     static String label(Context context) {
-        String value=mode(context);
-        for(int i=0;i<MODES.length;i++) if(MODES[i].equals(value)) return LABELS[i];
-        return LABELS[0];
+        java.util.List<String> values=selected(context);
+        return values.size()>1?values.size()+" 个来源":sourceLabel(values.get(0));
     }
+    static long selectionRevision(Context context){return prefs(context).getLong("selection_revision",0);}
+    private static void saveSelection(Context context,java.util.List<String> values,String current,String customUrl){
+        SharedPreferences.Editor edit=prefs(context).edit().putStringSet("sources",new java.util.HashSet<>(values))
+            .putString("source",current).putLong("selection_revision",selectionRevision(context)+1);
+        if(customUrl!=null)edit.putString("custom_url",customUrl);edit.apply();
+    }
+    /** Returns false only when removing the last selected source. */
+    static boolean toggle(Context context,String source){
+        sourceLabel(source);java.util.List<String> values=new java.util.ArrayList<>(selected(context));String current=mode(context);
+        if(values.contains(source)){if(values.size()==1)return false;values.remove(source);}
+        else values.add(source);
+        if(!values.contains(current))current=values.get(0);
+        saveSelection(context,values,current,null);return true;
+    }
+    static void configureCustom(Context context,String url) throws IOException {
+        webUrl(url);java.util.List<String> values=new java.util.ArrayList<>(selected(context));
+        if(!values.contains("custom"))values.add("custom");saveSelection(context,values,"custom",url);
+    }
+    /** Advance the active provider without changing the user's selected set. Main-thread caller owns request ordering. */
+    static void advance(Context context){
+        java.util.List<String> values=selected(context);int index=values.indexOf(mode(context));
+        prefs(context).edit().putString("source",values.get((index+1)%values.size())).apply();
+    }
+    static boolean activateGallery(Context context){
+        if(GalleryCollection.isGallery(mode(context)))return true;
+        for(String source:selected(context))if(GalleryCollection.isGallery(source)){
+            prefs(context).edit().putString("source",source).apply();return true;
+        }
+        return false;
+    }
+    static boolean rotates(Context context){return selected(context).size()>1||GalleryCollection.isGallery(mode(context));}
     static String status() { return lastStatus; }
     static Bitmap offline(Context context) throws IOException {
         try(InputStream input=context.getAssets().open("wallpapers/coast.png")) {
@@ -75,78 +120,81 @@ final class BackgroundRepository {
     /** Worker only. A new image replaces the display only after successful decoding. */
     static Scene load(Context context, boolean force) {return load(context,force,1);}
     static Scene load(Context context, boolean force,int direction) {
-        String mode=mode(context), note="";
+        java.util.List<String> choices=selected(context);String current=prefs(context).getString("source",choices.get(0)),note="";
+        int start=choices.indexOf(current);if(start<0)start=0;
         lastError="";
-        try {
-            if ("coast".equals(mode)) return finished(new Scene(offline(context),"coast","","","原创生成的海岸风景","","正在显示离线背景"));
-            if (GalleryCollection.isGallery(mode)) return finished(gallery(context,mode,force,direction));
-            if ("recent".equals(mode)) {
-                RecentViewing.Snapshot history=RecentViewing.read(context);
-                if(history.item!=null) {
-                    RecentViewing.Item item=history.item;
-                    JSONObject meta=new JSONObject().put("identity",item.imageUri).put("title",item.title)
-                        .put("subtitle",item.episode).put("credit",item.sourceLabel).put("package",item.packageName);
-                    try { return finished(fetchImage(context,"recent",item.imageUri,meta,force).status("已读取 TCL 最近观看")); }
-                    catch(Exception failure) { lastError=failure.getClass().getSimpleName(); note="最近观看海报暂不可用"; }
-                } else {
-                    note="empty".equals(history.status) ? "暂无观看记录" : "denied".equals(history.status) ? "电视未允许读取观看记录" :
-                        "unsupported".equals(history.status) ? "本机未提供已确认的观看记录入口" : "观看记录暂不可用";
-                    lastError=history.error;
-                }
+        for(int offset=0;offset<choices.size();offset++){
+            String source=choices.get((start+offset)%choices.size());
+            try{
+                Scene value=loadSource(context,source,force,direction);
+                return finished(note.isEmpty()?value:value.status(note+" · 当前显示"+sourceLabel(value.source)));
+            }catch(Exception failure){
+                lastError=failure.getClass().getSimpleName();String why=sourceLabel(source)+"不可用（"+reason(failure)+"）";
+                if(note.isEmpty())note=why;
+                try{
+                    Scene cached=cache(context,source,"custom".equals(source)?prefs(context).getString("custom_url","").trim():null);
+                    if(cached!=null)return finished(cached.status(why+" · 保留上次背景"));
+                }catch(Exception unavailable){/* Continue only to another user-selected provider. */}
             }
-            if ("custom".equals(mode)) {
-                String endpoint=prefs(context).getString("custom_url","").trim();
-                webUrl(endpoint);
-                Scene cached=cache(context,"custom",endpoint);
-                if(!force && cached!=null && fresh(context,"custom",60*60*1000L)) return finished(cached.status("自定义背景 · 已缓存"));
-                byte[] payload=download(endpoint,IMAGE_LIMIT);
-                int first=0;while(first<payload.length && Character.isWhitespace((char)payload[first]))first++;
-                JSONObject meta=new JSONObject().put("identity",endpoint);
-                byte[] image=payload;
-                if(first<payload.length && payload[first]=='{') {
-                    if(payload.length>JSON_LIMIT) throw new IOException("Content metadata too large");
-                    JSONObject content=new JSONObject(new String(payload,StandardCharsets.UTF_8));
-                    String imageUrl=content.getString("image_url");webUrl(imageUrl);
-                    image=download(imageUrl,IMAGE_LIMIT);
-                    for(String key:new String[]{"title","subtitle","credit"}) meta.put(key,limited(content.optString(key,"")));
-                    meta.put("package",limited(content.optString("package_name","")));
-                }
-                return finished(store(context,"custom",image,meta).status("自定义背景 · 已更新"));
-            }
-            Scene daily=daily(context,force);
-            return finished(daily.status(note.isEmpty() ? daily.status : note+" · 当前显示每日风景"));
-        } catch(Exception failure) {
-            lastError=failure.getClass().getSimpleName();
-            String why="（"+reason(failure)+"）";
-            try {
-                Scene cached=cache(context,"custom".equals(mode)?"custom":GalleryCollection.isGallery(mode)?mode:"daily", "custom".equals(mode)?prefs(context).getString("custom_url","").trim():null);
-                if(cached!=null) return finished(cached.status("更新失败"+why+" · 保留上次背景"));
-                return finished(new Scene(offline(context),"coast","","","原创生成的海岸风景","",
-                    (note.isEmpty()?"背景更新失败"+why:note)+" · 当前显示离线海岸"));
-            } catch(Exception offlineFailure) { throw new IllegalStateException("Bundled wallpaper unavailable",offlineFailure); }
         }
+        try{return finished(new Scene(offline(context),"coast","","","原创生成的海岸风景","",note+" · 当前显示离线海岸"));}
+        catch(IOException unavailable){throw new IllegalStateException("Bundled wallpaper unavailable",unavailable);}
+    }
+    private static final class SourceUnavailable extends IOException {
+        SourceUnavailable(String message){super(message);}
+    }
+    private static Scene loadSource(Context context,String mode,boolean force,int direction) throws Exception {
+        if("coast".equals(mode))return new Scene(offline(context),"coast","","","原创生成的海岸风景","","正在显示离线背景");
+        if(GalleryCollection.isGallery(mode))return gallery(context,mode,force,direction);
+        if("recent".equals(mode)){
+            RecentViewing.Snapshot history=RecentViewing.read(context);
+            if(history.item==null)throw new SourceUnavailable("empty".equals(history.status)?"暂无观看记录":"denied".equals(history.status)?"电视未允许读取观看记录":"unsupported".equals(history.status)?"本机未提供已确认的观看记录入口":"观看记录暂不可用");
+            RecentViewing.Item item=history.item;
+            JSONObject meta=new JSONObject().put("identity",item.imageUri).put("title",item.title).put("subtitle",item.episode)
+                .put("credit",item.sourceLabel).put("package",item.packageName);
+            return fetchImage(context,"recent",item.imageUri,meta,force).status("已读取 TCL 最近观看");
+        }
+        if("custom".equals(mode)){
+            String endpoint=prefs(context).getString("custom_url","").trim();webUrl(endpoint);
+            Scene cached=cache(context,"custom",endpoint);
+            if(!force&&cached!=null&&fresh(context,"custom",60*60*1000L))return cached.status("自定义背景 · 已缓存");
+            byte[] payload=download(endpoint,IMAGE_LIMIT);int first=0;
+            while(first<payload.length&&Character.isWhitespace((char)payload[first]))first++;
+            JSONObject meta=new JSONObject().put("identity",endpoint);byte[] image=payload;
+            if(first<payload.length&&payload[first]=='{'){
+                if(payload.length>JSON_LIMIT)throw new IOException("Content metadata too large");
+                JSONObject content=new JSONObject(new String(payload,StandardCharsets.UTF_8));String imageUrl=content.getString("image_url");webUrl(imageUrl);
+                image=download(imageUrl,IMAGE_LIMIT);
+                for(String key:new String[]{"title","subtitle","credit"})meta.put(key,limited(content.optString(key,"")));
+                meta.put("package",limited(content.optString("package_name","")));
+            }
+            return store(context,"custom",image,meta).status("自定义背景 · 已更新");
+        }
+        if("daily".equals(mode))return daily(context,force);
+        throw new IllegalArgumentException("Unknown background source");
     }
 
     private static Scene gallery(Context context,String kind,boolean force,int direction) throws Exception {
         java.util.List<GalleryCollection.Work> works=GalleryCollection.read(context,kind);
+        if(works.isEmpty())throw new SourceUnavailable("摄影集尚未添加照片");
         JSONObject previous=metadata(context,kind);
         Scene cached=cache(context,kind,null);
         if(!force&&cached!=null&&fresh(context,kind,GalleryCollection.ROTATE_MS)) {
             // Resolve old and new cache labels from the catalog without parsing display credit or downloading again.
             for(GalleryCollection.Work item:works)if(item.id.equals(previous.optString("artwork_id")))
-                return scene(cached.bitmap,kind,item.metadata()).status(("art".equals(kind)?"西方艺术":"NASA 太空")+" · 《"+item.title+"》");
+                return scene(cached.bitmap,kind,item.metadata()).status(sourceLabel(kind)+" · 《"+item.title+"》");
         }
         String before=previous.optString("artwork_id","");
         GalleryCollection.Work work=GalleryCollection.next(works,before,false,direction);
         byte[] bytes;boolean bundled=!work.asset.isEmpty();
         if(!bundled){
             try{return store(context,kind,download(work.image,IMAGE_LIMIT),work.metadata())
-                .status(("art".equals(kind)?"西方艺术":"NASA 太空")+" · 《"+work.title+"》");}
+                .status(sourceLabel(kind)+" · 《"+work.title+"》");}
             catch(IOException unavailable){lastError=unavailable.getClass().getSimpleName();work=GalleryCollection.next(works,before,true,direction);bundled=true;}
         }
         try(InputStream input=context.getAssets().open(work.asset)){bytes=read(input,IMAGE_LIMIT);}
         if(bytes.length!=work.bytes||!sha(bytes).equals(work.digest))throw new IOException("Bundled art integrity mismatch");
-        return store(context,kind,bytes,work.metadata()).status(("art".equals(kind)?"西方艺术":"NASA 太空")+" · 《"+work.title+"》 · 内置图片");
+        return store(context,kind,bytes,work.metadata()).status(sourceLabel(kind)+" · 《"+work.title+"》 · 内置图片");
     }
 
     private static Scene daily(Context context, boolean force) throws Exception {
@@ -278,6 +326,7 @@ final class BackgroundRepository {
     }
     /** Human reason for a failed fetch; only the failure kind, never URLs or content. */
     static String reason(Throwable failure) {
+        if(failure instanceof SourceUnavailable)return failure.getMessage();
         if(failure==null) return "未知原因";
         String message=failure.getMessage()==null?"":failure.getMessage();
         if(failure instanceof java.net.SocketTimeoutException) return "连接超时";
@@ -294,7 +343,7 @@ final class BackgroundRepository {
     private static String limited(String value){return value.length()>512?value.substring(0,512):value;}
     private static Scene finished(Scene result){lastStatus=result.status;lastSource=result.source;lastAt=System.currentTimeMillis();return result;}
     static JSONObject diagnostics(Context context) throws Exception {
-        return new JSONObject().put("selected_source",mode(context)).put("displayed_source",lastSource).put("status",lastStatus).put("error_class",lastError)
+        return new JSONObject().put("selected_source",mode(context)).put("selected_sources",new org.json.JSONArray(selected(context))).put("displayed_source",lastSource).put("status",lastStatus).put("error_class",lastError)
             .put("last_completed_at_epoch_ms",lastAt).put("history",RecentViewing.diagnostics(context))
             .put("system_wallpaper_read_contract","not_confirmed");
     }

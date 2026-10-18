@@ -173,6 +173,7 @@ final class TvAppearance {
         private float radius;
         private Shader sheen, rim;
         private Bitmap sampled;
+        private Fill focusFill;
         private android.graphics.BitmapShader backdrop;
 
         Glass(Context c, Wallpaper source, float cornerRadius, float rimWidth, int style) {
@@ -183,7 +184,15 @@ final class TvAppearance {
             });
         }
         /** Scrolling content needs the outline clip; focusable modules draw everything rounded and must not use it. */
-        Glass clipContent(boolean value) { setClipToOutline(value); return this; }
+        Glass clipContent(boolean value) {
+            setClipToOutline(value);setClipChildren(value);setClipToPadding(value);return this;
+        }
+        /** Focus belongs to the glass paint pass, before its content, with stable bounds from the first frame. */
+        void focusFill(Fill value) {
+            if(focusFill!=null)focusFill.setCallback(null);
+            focusFill=value;value.setCallback(this);invalidate();
+        }
+        @Override protected boolean verifyDrawable(Drawable value){return value==focusFill||super.verifyDrawable(value);}
         private float radius(View v) { return radius < 0 ? Math.min(v.getWidth(), v.getHeight()) / 2f : radius; }
         @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); wallpaper.samplers.add(this); }
         @Override protected void onDetachedFromWindow() { wallpaper.samplers.remove(this); super.onDetachedFromWindow(); }
@@ -215,6 +224,7 @@ final class TvAppearance {
             paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(line); paint.setShader(rim);
             canvas.drawRoundRect(edge, r - inset, r - inset, paint);
             paint.setShader(null); paint.setStyle(Paint.Style.FILL);
+            if(focusFill!=null){focusFill.setBounds(0,0,w,h);focusFill.draw(canvas);}
         }
     }
 
