@@ -4,7 +4,7 @@
 
 这是从 TCL 实践工程整理出的**独立公开参考版**，包含实际实现，不包含原家庭的网络配置、签名密钥、诊断数据、厂商 APK 或安装策略修改工具。**小米电视需要重新验证默认 HOME、物理 Home 键及观看记录接口；这里不承诺通用替换所有厂商首页。**
 
-公开版包名为 `io.github.elliclee.livingroom`，版本从 `1.0.0/code1` 开始，和原私人版本独立。它不会直接覆盖原私人 APK；每位开发者首次构建生成自己的本地签名。
+公开版包名为 `io.github.elliclee.livingroom`，版本从 `1.0.0/code1` 开始，当前 `1.1.0/code2`，和原私人版本独立。它不会直接覆盖原私人 APK；每位开发者首次构建生成自己的本地签名。
 
 ## 给朋友的最快开始方式
 
@@ -20,7 +20,8 @@
 - 宽幅 banner、自适应/透明/圆形图标适配，统一卡面和焦点效果。
 - 应用启动、手动排序/隐藏、常用优先排序，偏好保存在本机。
 - 控制中心、系统设置与原首页入口、系统 HOME 角色请求。
-- 原创离线海岸背景、每日风景、自定义 HTTP(S) 图片或 JSON；网络失败回到可用背景。
+- 原创海岸、每日风景、12 幅西方艺术画作、5 张 NASA 航天摄影、自定义 HTTP(S) 图片或 JSON；其中 10 张艺术/NASA 图片随应用内置。
+- 从首排按上浏览背景，左右切换前后图片，按下/返回恢复应用焦点；艺术/NASA 在主屏可见期间每 30 分钟轮换。
 - TCL 观看记录的**只读适配示例**；小米及其他设备没有已验证的观看记录适配，无权限/无数据时正常显示其他背景。只能打开对应视频应用，不声称支持指定集数续播。
 - 电视检查/下载更新、摘要/包名/版本/签名验证、系统确认安装；电脑端固定版本清单和不可变包地址。
 
@@ -39,14 +40,14 @@ python3 build.py
 
 默认更新端口 `57816`，可在首次 `init` 时通过 `--port` 指定。构建不启动服务。首次构建自动生成本项目的独立签名；配置与授权写入 `.build/`，不会提交 Git。
 
-输出在 `dist/LivingRoom-1.0.0.apk`，附带 `.sha256` 和 `build-report.json`。通过电视支持的途径安装；没有连接/授权时，Codex 不能仅凭 IP 就控制电视。
+输出在 `dist/LivingRoom-1.1.0.apk`，附带 `.sha256` 和 `build-report.json`。通过电视支持的途径安装；没有连接/授权时，Codex 不能仅凭 IP 就控制电视。
 
 ## 检查更新
 
 电脑发布并运行服务：
 
 ```sh
-python3 update_server.py publish dist/LivingRoom-1.0.0.apk --notes '首次构建'
+python3 update_server.py publish dist/LivingRoom-1.1.0.apk --notes '首次构建'
 python3 update_server.py serve
 ```
 
@@ -65,7 +66,7 @@ python3 update_server.py serve
 | `src/io/github/elliclee/livingroom/HomeActivity.java` | 布局、焦点、排序、控制中心与更新 UI |
 | `TvAppearance.java`、`AppArtwork.java` | 材质、字体/形状、图标卡面处理 |
 | `AppRanking.java` | 本桌面启动次数和应用顺序 |
-| `BackgroundRepository.java`、`RecentViewing.java` | 图片/接口缓存及现有 TCL 只读适配 |
+| `BackgroundRepository.java`、`GalleryCollection.java`、`RecentViewing.java` | 图片/接口缓存及现有 TCL 只读适配 |
 | `DeviceNavigation.java` | 本机系统设置、记录原 HOME 与恢复入口 |
 | `UpdateFlow.java`、`UpdateResultReceiver.java` | 私有下载、包校验、用户确认及回调 |
 | `build.py`、`update_server.py` | 构建/本地签名、更新包发布与服务 |
@@ -78,12 +79,16 @@ python3 update_server.py serve
 python3 -W error::ResourceWarning -m unittest discover -s tests -v
 ```
 
-无需 SDK 的测试覆盖 HTTP 鉴权、路由边界、清单切换、配置复用和无效地址。先成功构建后，还会用真实 SDK/签名工具验证正确发布，以及错误签名、其他包名、缺少 HOME 被拒绝，失败发布不改变当前清单。未构建时该组会明确跳过。
+无需 SDK 的测试覆盖图库许可/来源/素材摘要，以及 HTTP 鉴权、路由边界、清单切换、配置复用和无效地址。先成功构建后，还会用真实 SDK/签名工具验证正确发布，以及错误签名、其他包名、缺少 HOME 被拒绝，失败发布不改变当前清单。未构建时该组会明确跳过。
+
+在明确选择的隔离模拟器上，可另外运行 `python3 tools/test_android_gallery.py --serial emulator-具体端口`，验证真实 JPEG 解码和背景加载；该工具不创建/关闭模拟器，不允许实际电视，且会调整测试包的背景缓存与偏好。
 
 实际公开版检查与边界见 [验证记录](docs/验证记录.md)。模拟器、静态分析和 TCL 经验不能代替朋友的小米实机结果。
 
 ## 设计与素材
 
 见 [设计与适配](docs/设计与适配.md)、[素材说明](docs/素材说明.md)。仓库不附 Apple 官方截图或第三方应用品牌图标；应用运行时读取本机已安装应用的图标。每日风景由电视直接访问 Bing，自定义背景使用用户配置的地址；这些网络图片的权利不随本仓库 MIT 许可转移。
+
+艺术与 NASA 来源、维护命令和遥控逻辑见 [艺术背景设计](docs/艺术背景设计.md)。素材单独注明授权，未改变源码许可。
 
 源码采用 [MIT License](LICENSE)。

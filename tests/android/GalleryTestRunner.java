@@ -1,0 +1,36 @@
+package io.github.elliclee.livingroom;
+import android.app.*;import android.content.*;import android.graphics.*;import android.os.*;import android.view.*;import android.widget.*;import java.io.*;import java.util.*;import org.json.*;
+public final class GalleryTestRunner extends Instrumentation {
+ private Context app;private final JSONArray passed=new JSONArray();
+ interface Attempt{void run()throws Exception;}
+ void check(boolean value,String label){if(!value)throw new AssertionError(label);}
+ void reject(Attempt attempt,String label)throws Exception{try{attempt.run();throw new AssertionError("Accepted "+label);}catch(IOException expected){}}
+ String current(String kind)throws Exception{File path=new File(app.getFilesDir(),"backgrounds/"+kind+".json");try(InputStream in=new FileInputStream(path);ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1)out.write(b,0,n);return new JSONObject(out.toString("UTF-8")).getString("artwork_id");}}
+ JSONObject catalog(String kind)throws Exception{try(InputStream in=app.getAssets().open(kind+"/catalog.json");ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1)out.write(b,0,n);return new JSONObject(out.toString("UTF-8"));}}
+ public void onCreate(Bundle args){super.onCreate(args);start();}
+ public void onStart(){Bundle result=new Bundle();try{
+  app=getTargetContext();check(Build.PRODUCT.contains("sdk"),"Emulator only");
+  for(String kind:new String[]{"art","nasa"}){
+   List<GalleryCollection.Work> works=GalleryCollection.read(app,kind);check(works.size()==(kind.equals("art")?12:5),"Catalog count");
+   for(GalleryCollection.Work work:works)if(!work.asset.isEmpty()){try(InputStream input=app.getAssets().open(work.asset)){Bitmap image=BitmapFactory.decodeStream(input);check(image!=null&&image.getWidth()<=2560&&image.getHeight()<=1440,"Real bundled image decode and dimensions");image.recycle();}}
+   String first=works.get(0).id,next=GalleryCollection.next(works,first,false,1).id;
+   check(!first.equals(next),"Next differs");check(GalleryCollection.next(works,next,false,-1).id.equals(first),"Previous restores identity");
+   check(GalleryCollection.next(works,first,true,-1).asset.length()>0,"Offline reverse wraps");
+  }
+  passed.put("17 catalog entries, 10 actual JPEG decodes, next/previous and offline wrap");
+  JSONObject invalid=catalog("art");invalid.getJSONArray("works").getJSONObject(0).put("is_public_domain",false);reject(()->GalleryCollection.parse(invalid,"art"),"non-public-domain art");
+  JSONObject unsafe=catalog("nasa");unsafe.getJSONArray("works").getJSONObject(0).put("image_url","https://example.com/fake.jpg");reject(()->GalleryCollection.parse(unsafe,"nasa"),"foreign NASA host");
+  JSONObject traversal=catalog("art");traversal.getJSONArray("works").getJSONObject(0).put("asset","../private.jpg");reject(()->GalleryCollection.parse(traversal,"art"),"asset traversal");
+  reject(()->GalleryCollection.parse(catalog("art"),"nasa"),"mixed provider identity");passed.put("rights flags, provider identity, image origin and asset path enforced");
+  File dir=new File(app.getFilesDir(),"backgrounds");for(String kind:new String[]{"art","nasa"})for(String suffix:new String[]{".json",".img"})new File(dir,kind+suffix).delete();
+  BackgroundRepository.prefs(app).edit().putString("source","art").commit();
+  BackgroundRepository.Scene first=BackgroundRepository.load(app,true);String id=current("art");check(first.source.equals("art")&&first.credit.contains("CC0"),"Art metadata");first.bitmap.recycle();
+  BackgroundRepository.Scene cached=BackgroundRepository.load(app,false);check(current("art").equals(id),"Fresh art cache stable");cached.bitmap.recycle();
+  BackgroundRepository.Scene next=BackgroundRepository.load(app,true,1);check(!current("art").equals(id),"Forced next");next.bitmap.recycle();
+  BackgroundRepository.Scene prev=BackgroundRepository.load(app,true,-1);check(current("art").equals(id),"Actual previous");prev.bitmap.recycle();
+  BackgroundRepository.prefs(app).edit().putString("source","nasa").commit();BackgroundRepository.Scene nasa=BackgroundRepository.load(app,true);check(nasa.source.equals("nasa")&&!nasa.credit.contains("CC0"),"NASA provenance distinct");nasa.bitmap.recycle();
+  passed.put("real background loading, stable timed cache, forced next/previous and NASA credit");
+  BackgroundRepository.prefs(app).edit().putString("source","art").commit();app.getSharedPreferences("home-layout",0).edit().putBoolean("home_role_prompted",true).commit();
+  result.putString("passed",passed.toString());finish(Activity.RESULT_OK,result);
+ }catch(Throwable failure){result.putString("failure",failure.toString());finish(Activity.RESULT_CANCELED,result);}}
+}

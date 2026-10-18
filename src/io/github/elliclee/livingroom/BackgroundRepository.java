@@ -29,8 +29,8 @@ final class BackgroundRepository {
     private static final String[] DAILY = {
         "https://cn.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN",
         "https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN"};
-    static final String[] MODES = {"recent", "daily", "coast", "custom"};
-    static final String[] LABELS = {"最近观看优先", "每日风景", "原创海岸 · 离线", "自定义图片或接口"};
+    static final String[] MODES = {"recent", "daily", "art", "nasa", "coast", "custom"};
+    static final String[] LABELS = {"最近观看优先", "每日风景", "西方艺术 · 画廊", "NASA · 太空", "原创海岸 · 离线", "自定义图片或接口"};
     private static volatile String lastStatus = "尚未更新";
     private static volatile String lastError = "";
     private static volatile String lastSource = "none";
@@ -67,11 +67,13 @@ final class BackgroundRepository {
     }
 
     /** Worker only. A new image replaces the display only after successful decoding. */
-    static Scene load(Context context, boolean force) {
+    static Scene load(Context context, boolean force) {return load(context,force,1);}
+    static Scene load(Context context, boolean force,int direction) {
         String mode=mode(context), note="";
         lastError="";
         try {
             if ("coast".equals(mode)) return finished(new Scene(offline(context),"coast","","","原创生成的海岸风景","","正在显示离线背景"));
+            if (GalleryCollection.isGallery(mode)) return finished(gallery(context,mode,force,direction));
             if ("recent".equals(mode)) {
                 RecentViewing.Snapshot history=RecentViewing.read(context);
                 if(history.item!=null) {
@@ -111,12 +113,31 @@ final class BackgroundRepository {
             lastError=failure.getClass().getSimpleName();
             String why="（"+reason(failure)+"）";
             try {
-                Scene cached=cache(context,"custom".equals(mode)?"custom":"daily", "custom".equals(mode)?prefs(context).getString("custom_url","").trim():null);
+                Scene cached=cache(context,"custom".equals(mode)?"custom":GalleryCollection.isGallery(mode)?mode:"daily", "custom".equals(mode)?prefs(context).getString("custom_url","").trim():null);
                 if(cached!=null) return finished(cached.status("更新失败"+why+" · 保留上次背景"));
                 return finished(new Scene(offline(context),"coast","","","原创生成的海岸风景","",
                     (note.isEmpty()?"背景更新失败"+why:note)+" · 当前显示离线海岸"));
             } catch(Exception offlineFailure) { throw new IllegalStateException("Bundled wallpaper unavailable",offlineFailure); }
         }
+    }
+
+    private static Scene gallery(Context context,String kind,boolean force,int direction) throws Exception {
+        java.util.List<GalleryCollection.Work> works=GalleryCollection.read(context,kind);
+        JSONObject previous=metadata(context,kind);
+        Scene cached=cache(context,kind,null);
+        if(!force&&cached!=null&&fresh(context,kind,GalleryCollection.ROTATE_MS))
+            return cached.status(("art".equals(kind)?"西方艺术":"NASA 太空")+" · 《"+previous.optString("art_title")+"》");
+        String before=previous.optString("artwork_id","");
+        GalleryCollection.Work work=GalleryCollection.next(works,before,false,direction);
+        byte[] bytes;boolean bundled=!work.asset.isEmpty();
+        if(!bundled){
+            try{return store(context,kind,download(work.image,IMAGE_LIMIT),work.metadata())
+                .status(("art".equals(kind)?"西方艺术":"NASA 太空")+" · 《"+work.title+"》");}
+            catch(IOException unavailable){lastError=unavailable.getClass().getSimpleName();work=GalleryCollection.next(works,before,true,direction);bundled=true;}
+        }
+        try(InputStream input=context.getAssets().open(work.asset)){bytes=read(input,IMAGE_LIMIT);}
+        if(bytes.length!=work.bytes||!sha(bytes).equals(work.digest))throw new IOException("Bundled art integrity mismatch");
+        return store(context,kind,bytes,work.metadata()).status(("art".equals(kind)?"西方艺术":"NASA 太空")+" · 《"+work.title+"》 · 内置图片");
     }
 
     private static Scene daily(Context context, boolean force) throws Exception {

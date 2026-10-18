@@ -92,7 +92,10 @@ public final class HomeActivity extends Activity {
     private LinearLayout story,hint;
     private TextView clock,empty,sceneTitle,sceneSubtitle,focusedName,noticeText;
     private Button sceneOpen;
-    private View settings,scrim;
+    private View settings,scrim,backgroundTarget;
+    private TextView backgroundCaption;
+    private boolean browsing;
+    private int queuedGallerySteps;
     private Control gearControl;
     private PanelDialog controls;
     private UpdateScreen updateScreen;
@@ -138,6 +141,18 @@ public final class HomeActivity extends Activity {
             }
         });
         wallpaper=new TvAppearance.Wallpaper(this);root.addView(wallpaper,new FrameLayout.LayoutParams(-1,-1));
+        backgroundTarget=new View(this);backgroundTarget.setContentDescription("浏览背景，左右切换图片，下键返回应用");
+        if(Build.VERSION.SDK_INT>=26)backgroundTarget.setDefaultFocusHighlightEnabled(false);
+        root.addView(backgroundTarget,box(1,1,width/2,height/2));
+        backgroundTarget.setOnKeyListener((v,key,event)->{
+            if(event.getAction()!=KeyEvent.ACTION_DOWN)return false;
+            if(key==KeyEvent.KEYCODE_DPAD_LEFT||key==KeyEvent.KEYCODE_DPAD_RIGHT){if(event.getRepeatCount()==0)changeBackground(key==KeyEvent.KEYCODE_DPAD_LEFT?-1:1);return true;}
+            if(key==KeyEvent.KEYCODE_DPAD_DOWN||key==KeyEvent.KEYCODE_BACK){focusGrid();return true;}
+            if(key==KeyEvent.KEYCODE_DPAD_UP){settings.requestFocus();return true;}
+            if(key==KeyEvent.KEYCODE_DPAD_CENTER||key==KeyEvent.KEYCODE_ENTER){if(event.getRepeatCount()==0&&scene!=null&&canLaunch(scene.packageName))launchPackage(scene.packageName);return true;}
+            return false;
+        });
+
 
         story=new LinearLayout(this);story.setOrientation(LinearLayout.VERTICAL);story.setGravity(Gravity.START);
         sceneTitle=text("",TITLE1,TvAppearance.TEXT,500);sceneTitle.setMaxLines(2);sceneTitle.setEllipsize(TextUtils.TruncateAt.END);legible(sceneTitle);
@@ -194,7 +209,7 @@ public final class HomeActivity extends Activity {
             // The grid is drawn lower than it is laid out; keep DOWN on the last row from searching outside it.
             if(event.getAction()==KeyEvent.ACTION_DOWN&&key==KeyEvent.KEYCODE_DPAD_DOWN&&!visible.isEmpty()&&focusedPosition()/COLUMNS==(visible.size()-1)/COLUMNS)return true;
             if(event.getAction()==KeyEvent.ACTION_DOWN&&event.getRepeatCount()==0&&key==KeyEvent.KEYCODE_DPAD_UP&&focusedPosition()<COLUMNS){
-                if(shelfAvailable()){setShelf(true);sceneOpen.requestFocus();}else settings.requestFocus();return true;
+                enterBackground();return true;
             }return false;
         });
         grid.setEmptyView(empty);
@@ -215,6 +230,7 @@ public final class HomeActivity extends Activity {
         gearControl=new Control(settings,new TvAppearance.Fill(0x00ffffff,-1),1.08f);gearControl.glyph(gear);
         settings.setOnClickListener(v->showSettings());
         settings.setOnKeyListener((v,key,event)->{
+            if(event.getAction()==KeyEvent.ACTION_DOWN&&key==KeyEvent.KEYCODE_DPAD_UP){enterBackground();return true;}
             if(event.getAction()==KeyEvent.ACTION_DOWN&&(key==KeyEvent.KEYCODE_DPAD_DOWN||key==KeyEvent.KEYCODE_DPAD_LEFT)){
                 if(!visible.isEmpty()){focusGrid();return true;}
             }return event.getAction()==KeyEvent.ACTION_DOWN&&(key==KeyEvent.KEYCODE_DPAD_UP||key==KeyEvent.KEYCODE_DPAD_RIGHT);
@@ -228,6 +244,8 @@ public final class HomeActivity extends Activity {
         notice.addView(noticeText,new FrameLayout.LayoutParams(-2,-2));
         FrameLayout.LayoutParams noticeParams=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.RIGHT);noticeParams.rightMargin=px(56);noticeParams.topMargin=px(126);root.addView(notice,noticeParams);
 
+        backgroundCaption=text("",CAPTION1,TvAppearance.TEXT,400);backgroundCaption.setMaxLines(4);legible(backgroundCaption);backgroundCaption.setVisibility(View.GONE);
+        FrameLayout.LayoutParams creditParams=new FrameLayout.LayoutParams(width-px(160),-2,Gravity.BOTTOM|Gravity.START);creditParams.leftMargin=px(80);creditParams.bottomMargin=px(40);root.addView(backgroundCaption,creditParams);
         scrim=new View(this);scrim.setBackgroundColor(0xff000000);scrim.setAlpha(0);scrim.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         root.addView(scrim,new FrameLayout.LayoutParams(-1,-1));
         applyMotion(false);
@@ -241,7 +259,7 @@ public final class HomeActivity extends Activity {
     private int nameWidth(){return Math.round(cardWidth*FOCUS_SCALE)+px(GUTTER);}
     private int gridHeight(int count){int rows=Math.max(1,(count+COLUMNS-1)/COLUMNS);return px(GRID_TOP)*2+rows*rowPitch-px(ROW_GAP)+px(NAME_SPACE);}
     private final Runnable tick=new Runnable(){
-        @Override public void run(){if(destroyed)return;clock.setText(android.text.format.DateFormat.getTimeFormat(HomeActivity.this).format(new Date()));ui.postDelayed(this,60000-System.currentTimeMillis()%60000);}
+        @Override public void run(){if(destroyed)return;clock.setText(android.text.format.DateFormat.getTimeFormat(HomeActivity.this).format(new Date()));if(lastBackground>0&&!backgroundBusy&&GalleryCollection.isGallery(BackgroundRepository.mode(HomeActivity.this))&&System.currentTimeMillis()-lastBackground>=GalleryCollection.ROTATE_MS)refreshBackground(false);ui.postDelayed(this,60000-System.currentTimeMillis()%60000);}
     };
     @Override protected void onResume(){
         super.onResume();ui.removeCallbacks(tick);tick.run();loadApps();
@@ -251,24 +269,40 @@ public final class HomeActivity extends Activity {
         }
     }
     @Override protected void onPause(){ui.removeCallbacks(tick);if(moving!=null)finishMove();super.onPause();}
-    private void refreshBackground(boolean force){
+    private void refreshBackground(boolean force){refreshBackground(force,1);}
+    private void refreshBackground(boolean force,int direction){
         // A manual refresh while an automatic one runs waits for it instead of being reported as a failure.
-        if(backgroundBusy){if(force){forceQueued=true;notice("正在更新背景……",false);}return;}
-        backgroundBusy=true;if(force)notice("正在更新背景……",false);
+        if(backgroundBusy){if(force){forceQueued=true;if(!browsing)notice("正在更新背景……",false);}return;}
+        backgroundBusy=true;if(force&&!browsing)notice("正在更新背景……",false);
         final int generation=++backgroundGeneration;final String requestedMode=BackgroundRepository.mode(this);
         backgrounds.execute(()->{
             BackgroundRepository.Scene result=null;Bitmap frosted=null;RuntimeException error=null;
-            try{result=BackgroundRepository.load(getApplicationContext(),force);frosted=TvAppearance.frost(result.bitmap);}catch(RuntimeException failure){error=failure;}
+            try{result=BackgroundRepository.load(getApplicationContext(),force,direction);frosted=TvAppearance.frost(result.bitmap);}catch(RuntimeException failure){error=failure;}
             final BackgroundRepository.Scene value=result;final Bitmap frost=frosted;final RuntimeException problem=error;
             ui.post(()->{if(destroyed||generation!=backgroundGeneration)return;backgroundBusy=false;lastBackground=System.currentTimeMillis();
-                boolean again=forceQueued;forceQueued=false;
-                if(!requestedMode.equals(BackgroundRepository.mode(this))){refreshBackground(force||again);return;}
+                boolean again=forceQueued;forceQueued=false;int steps=queuedGallerySteps;queuedGallerySteps=0;
+                if(!requestedMode.equals(BackgroundRepository.mode(this))){refreshBackground(force||again||steps!=0,steps==0?direction:steps);return;}
                 if(value!=null&&frost!=null){scene=value;wallpaper.image(value.bitmap,frost);applyScene();}
                 else failure("背景读取失败（"+BackgroundRepository.reason(problem)+"）");
-                if(again)refreshBackground(true);
-                else if(force&&value!=null)failure(value.status);
+                if(steps!=0)refreshBackground(true,steps);
+                else if(again)refreshBackground(true);
+                else if(force&&value!=null&&!browsing)failure(value.status);
             });
         });
+    }
+    private void enterBackground(){
+        browsing=true;expanded=false;shelf=true;backgroundTarget.setFocusable(true);backgroundTarget.requestFocusFromTouch();applyMotion(true);updateBackgroundCaption();
+    }
+    private void updateBackgroundCaption(){
+        backgroundCaption.setVisibility(browsing?View.VISIBLE:View.GONE);
+        if(browsing)backgroundCaption.setText((scene==null||scene.credit.isEmpty()?"":scene.credit+"\n")+"左右切换图片 · 下键返回应用");
+    }
+    private void changeBackground(int direction){
+        if(!GalleryCollection.isGallery(BackgroundRepository.mode(this))){
+            BackgroundRepository.prefs(this).edit().putString("source","art").apply();
+        }
+        if(backgroundBusy){queuedGallerySteps=Math.max(-8,Math.min(8,queuedGallerySteps+direction));return;}
+        refreshBackground(true,direction);
     }
     private boolean titled(){return scene!=null&&!scene.title.isEmpty();}
     private boolean shelfAvailable(){return titled()&&sceneOpen.getVisibility()==View.VISIBLE;}
@@ -278,8 +312,8 @@ public final class HomeActivity extends Activity {
             sceneTitle.setText(scene.title);sceneSubtitle.setText(("recent".equals(scene.source)?"最近在看":"自定义内容")+(scene.subtitle.isEmpty()?"":" · "+scene.subtitle));
             sceneOpen.setVisibility(canLaunch(scene.packageName)?View.VISIBLE:View.GONE);
         }
-        if(shelf&&!shelfAvailable()){shelf=false;if(sceneOpen.hasFocus())focusGrid();}
-        applyMotion(true);
+        if(shelf&&!browsing&&!shelfAvailable()){shelf=false;if(sceneOpen.hasFocus())focusGrid();}
+        updateBackgroundCaption();applyMotion(true);
     }
 
     /** Derives dock, top-shelf and grid positions from the selected row; the grid itself never scrolls. */
@@ -293,11 +327,11 @@ public final class HomeActivity extends Activity {
     }
     private void setShelf(boolean value){if(shelf==value||value&&!shelfAvailable())return;shelf=value;applyMotion(true);}
     /** The hidden Top Shelf button must not catch default focus search from the translated grid. */
-    private void shelfFocus(){if(!shelf&&sceneOpen.hasFocus())focusGrid();sceneOpen.setFocusable(shelf);}
+    private void shelfFocus(){if(!shelf&&sceneOpen.hasFocus())focusGrid();sceneOpen.setFocusable(shelf&&!browsing);}
     private float shelfDrop(){return height-(dockRow-px(DOCK_TOP))+px(24);}
     private void applyMotion(boolean animate){
         float base=dockRow-px(GRID_TOP),gridY=expanded?-scrollRow*rowPitch:base+(shelf?shelfDrop():0),dockY=gridY-base;
-        float storyAlpha=titled()&&!expanded?1:0,hintAlpha=shelfAvailable()&&!expanded&&!shelf?1:0,openAlpha=shelf?1:0,pillAlpha=expanded?0:1;
+        float storyAlpha=titled()&&!expanded&&!browsing?1:0,hintAlpha=!expanded&&!shelf?1:0,openAlpha=shelf&&!browsing&&shelfAvailable()?1:0,pillAlpha=expanded?0:1;
         float blurTarget=expanded?1:0,titleTarget=storyAlpha;
         shelfFocus();
         for(View v:new View[]{grid,dock,story,hint,sceneOpen,pill})v.animate().cancel();
@@ -953,12 +987,14 @@ public final class HomeActivity extends Activity {
         });panel.action("取消",()->panel.dialog.dismiss());panel.show();
     }
     private void focusGrid(){
-        if(visible.isEmpty()){settings.requestFocus();return;}
+        browsing=false;backgroundTarget.setFocusable(false);updateBackgroundCaption();
+        if(visible.isEmpty()){settings.requestFocus();if(shelf)setShelf(false);return;}
         grid.requestFocus();grid.setSelection(selectedPosition);
         if(shelf)setShelf(false);
     }
     private void focusInitial(){
         if(firstLoad||!hasWindowFocus())return;
+        if(browsing){backgroundTarget.requestFocusFromTouch();return;}
         if(visible.isEmpty())settings.requestFocusFromTouch();else{grid.requestFocusFromTouch();grid.setSelection(selectedPosition);}
     }
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);if(grid!=null&&grid.getSelectedItemPosition()<0)focusInitial();}
