@@ -4,7 +4,7 @@
 
 这是从 TCL 实践工程整理出的**独立公开参考版**，包含实际实现，不包含原家庭的网络配置、签名密钥、诊断数据、厂商 APK 或安装策略修改工具。**小米电视需要重新验证默认 HOME、物理 Home 键及观看记录接口；这里不承诺通用替换所有厂商首页。**
 
-公开版包名为 `io.github.elliclee.livingroom`，版本从 `1.0.0/code1` 开始，当前 `1.2.0/code5`，和原私人版本独立。它不会直接覆盖原私人 APK；每位开发者首次构建生成自己的本地签名。
+公开版包名为 `io.github.elliclee.livingroom`，版本从 `1.0.0/code1` 开始，当前 `1.2.1/code6`，和原私人版本独立。它不会直接覆盖原私人 APK；每位开发者首次构建生成自己的本地签名。
 
 ## 给朋友的最快开始方式
 
@@ -42,14 +42,14 @@ python3 build.py
 
 默认更新端口 `57816`，可在首次 `init` 时通过 `--port` 指定。构建不启动服务。首次构建自动生成本项目的独立签名；配置与授权写入 `.build/`，不会提交 Git。
 
-输出在 `dist/LivingRoom-1.2.0.apk`，附带 `.sha256` 和 `build-report.json`。通过电视支持的途径安装；没有连接/授权时，Codex 不能仅凭 IP 就控制电视。
+输出在 `dist/LivingRoom-1.2.1.apk`，附带 `.sha256` 和 `build-report.json`。通过电视支持的途径安装；没有连接/授权时，Codex 不能仅凭 IP 就控制电视。
 
 ## 检查更新
 
 电脑发布并运行服务：
 
 ```sh
-python3 update_server.py publish dist/LivingRoom-1.2.0.apk --notes '首次构建'
+python3 update_server.py publish dist/LivingRoom-1.2.1.apk --notes '首次构建'
 python3 update_server.py serve
 ```
 

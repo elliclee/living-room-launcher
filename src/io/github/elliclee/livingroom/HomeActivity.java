@@ -710,9 +710,10 @@ public final class HomeActivity extends Activity {
         void mark(TvAppearance.Glyph value){mark=value;apply(this.value);}
         void hold(boolean value){held=value;run(value||view.hasFocus()?1:0);}
         @Override public void onFocusChange(View v,boolean focused){run(focused||held?1:0);}
-        void run(float target){
-            if(animator!=null)animator.cancel();
-            if(!animations()){apply(target);return;}
+        void run(float target){run(target,animations());}
+        void run(float target,boolean animated){
+            if(animator!=null){animator.cancel();animator=null;}
+            if(!animated||value==target){apply(target);return;}
             animator=ValueAnimator.ofFloat(value,target);animator.setDuration(target>value?CONTROL_MS+40:CONTROL_MS);animator.setInterpolator(ease);
             animator.addUpdateListener(a->apply((float)a.getAnimatedValue()));animator.start();
         }
@@ -748,7 +749,7 @@ public final class HomeActivity extends Activity {
         static final int CENTER=0,ANCHOR=1,CONTROLS=2;
         final PanelDialog dialog;
         final FrameLayout frame;
-        final ViewGroup surface;
+        final ViewGroup surface,fade;
         final LinearLayout content;
         final List<TvAppearance.Glass> glass=new ArrayList<>();
         final int panelWidth,placement,margin;
@@ -756,7 +757,9 @@ public final class HomeActivity extends Activity {
         Rect anchor;
         View first;
         Panel(String title,String description,int w,int placement){
-            this.placement=placement;panelWidth=w;margin=px(28);
+            this.placement=placement;panelWidth=w;
+            // Include the 40px slide and the 10.4px focused capsule overflow in the alpha layer.
+            margin=px(placement==CONTROLS?56:28);
             dialog=new PanelDialog(this);dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
             frame=new FrameLayout(HomeActivity.this);frame.setPadding(margin,margin,margin,margin);frame.setClipChildren(false);frame.setClipToPadding(false);
             content=new LinearLayout(HomeActivity.this);content.setOrientation(LinearLayout.VERTICAL);content.setClipChildren(false);content.setClipToPadding(false);
@@ -773,6 +776,7 @@ public final class HomeActivity extends Activity {
                     TextView detail=text(description,CAPTION1,TvAppearance.MUTED,400);detail.setPadding(0,px(12),0,px(26));content.addView(detail);
                 }else heading.setPadding(0,0,0,px(placement==ANCHOR?16:24));
             }
+            fade=placement==CONTROLS?frame:surface;
             frame.addView(surface,new FrameLayout.LayoutParams(w,-2));
             note=text("",CAPTION1,TvAppearance.TEXT,500);note.setPadding(px(8),px(14),px(8),px(4));note.setVisibility(View.GONE);
             dialog.setContentView(frame);Window window=dialog.getWindow();window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));window.setWindowAnimations(0);
@@ -803,10 +807,20 @@ public final class HomeActivity extends Activity {
         }
         void show(){
             openPanels.add(this);holdScrim(placement==CONTROLS?.22f:placement==ANCHOR?.18f:.38f);
+            // Prepare the initial selection before the window can draw; only later focus moves animate.
+            if(placement==CONTROLS){((Control)first.getTag()).run(1,false);first.requestFocusFromTouch();}
             dialog.show();resize();
             float dx=placement==CONTROLS?px(40):0,dy=placement==CENTER?px(22):placement==ANCHOR?px(12):0;
-            if(animations()){surface.setAlpha(0);surface.setTranslationX(dx);surface.setTranslationY(dy);
-                surface.animate().alpha(1).translationX(0).translationY(0).setDuration(placement==CONTROLS?300:260).setInterpolator(ease).setUpdateListener(a->refreshGlass()).start();}
+            if(animations()){fade.setAlpha(0);surface.setTranslationX(dx);surface.setTranslationY(dy);
+                animateTo(1,0,0,placement==CONTROLS?300:260,ease,null);}
+        }
+        /** Alpha is composed within padded bounds; translation stays on the positioned content. */
+        void animateTo(float alpha,float dx,float dy,int duration,Interpolator curve,Runnable done){
+            android.view.ViewPropertyAnimator motion=surface.animate().translationX(dx).translationY(dy)
+                .setDuration(duration).setInterpolator(curve).setUpdateListener(a->refreshGlass());
+            if(fade==surface)motion.alpha(alpha);
+            else fade.animate().alpha(alpha).setDuration(duration).setInterpolator(curve).start();
+            motion.withEndAction(done).start();
         }
         void closing(){releaseScrim();}
     }
@@ -826,10 +840,11 @@ public final class HomeActivity extends Activity {
             if(!animations()||!isShowing()||destroyed){finishDismiss();return;}
             float dx=owner.placement==Panel.CONTROLS?px(40):0,dy=owner.placement==Panel.CENTER?px(16):owner.placement==Panel.ANCHOR?px(10):0;
             owner.surface.animate().cancel();
-            owner.surface.animate().alpha(0).translationX(dx).translationY(dy).setDuration(180).setInterpolator(leave).setUpdateListener(a->owner.refreshGlass()).withEndAction(this::finishDismiss).start();
+            owner.animateTo(0,dx,dy,180,leave,this::finishDismiss);
         }
         void dismissNow(){if(!leaving){leaving=true;owner.closing();}finishDismiss();}
         private void finishDismiss(){
+            owner.surface.animate().cancel();if(owner.fade!=owner.surface)owner.fade.animate().cancel();
             openPanels.remove(owner);try{super.dismiss();}catch(IllegalArgumentException detached){/* window already removed with the activity */}
             ui.post(()->{if(!destroyed&&root.hasWindowFocus()&&openPanels.isEmpty())focusInitial();});
         }
