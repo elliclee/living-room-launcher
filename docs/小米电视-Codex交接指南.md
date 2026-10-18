@@ -2,7 +2,18 @@
 
 > 使用方式：把整个文件交给能访问你本机文件、终端和局域网的 Codex，并告诉它“按照文档开始执行”。不需要预先填写全部信息；缺失的关键信息由 Codex 一次性询问。
 >
-> 本文是可独立使用的交接说明，不包含另一位用户的源码、APK、签名密钥、访问令牌或网络配置。只有本文时，从独立项目开始；如果另附源码，先检查现状再复用。
+> 本文是可独立使用的交接说明，不包含另一位用户的源码、APK、签名密钥、访问令牌或网络配置。优先克隆下面的公开仓库继续适配；如果仓库不可访问，再建立独立项目。
+
+## 已有参考源码
+
+公开仓库：[elliclee/living-room-launcher](https://github.com/elliclee/living-room-launcher)。包含原生首页、图标卡面处理、背景、常用排序和电脑更新服务；根目录 README.md、AGENTS.md 提供构建和适配入口。
+
+```sh
+git clone https://github.com/elliclee/living-room-launcher.git
+cd living-room-launcher
+```
+
+先理解现有实现再适配小米。仓库使用独立公开版包名/签名配置，小米观看记录和真正默认 HOME 均需要本机验证。
 
 ## 1. 给 Codex 的目标
 
